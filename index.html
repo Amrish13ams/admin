@@ -3,12 +3,13 @@
 <head>
   <meta charset="UTF-8" />
   <title>Admin Dashboard</title>
-  <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
+  <!-- MQTT.js library -->
+  <script src="https://unpkg.com/mqtt/dist/mqtt.min.js"></script>
   <style>
     body { font-family: sans-serif; margin: 2rem; max-width: 450px; }
-    .status-box { padding: 12px; border-radius: 6px; margin-bottom: 1.5rem; font-weight: bold; }
-    .online { background: #dcfce7; color: #15803d; }
-    .offline { background: #fee2e2; color: #b91c1c; }
+    .status-box { padding: 12px; border-radius: 6px; margin-bottom: 1.5rem; font-weight: bold; text-align: center; }
+    .online { background: #dcfce7; color: #15803d; border: 1px solid #86efac; }
+    .offline { background: #fee2e2; color: #b91c1c; border: 1px solid #fca5a5; }
     .btn { padding: 10px 16px; border: none; border-radius: 5px; cursor: pointer; font-weight: bold; width: 100%; }
     .btn-primary { background: #2563eb; color: #fff; }
     .btn-success { background: #16a34a; color: #fff; }
@@ -23,7 +24,7 @@
   <h2>Remote Admin Dashboard</h2>
   
   <div id="statusBox" class="status-box offline">
-    Catalog Status: Disconnected / Offline
+    Catalog Status: Offline
   </div>
 
   <button id="openModalBtn" class="btn btn-primary" disabled onclick="toggleForm()">
@@ -33,12 +34,12 @@
   <div id="modal">
     <div class="form-group">
       <label>Product Name</label>
-      <input type="text" id="pName" placeholder="e.g. Diamond Necklace" required />
+      <input type="text" id="pName" placeholder="e.g. Gold Bangle" required />
     </div>
 
     <div class="form-group">
       <label>Product Weight (g)</label>
-      <input type="number" id="pWeight" placeholder="e.g. 18.2" required />
+      <input type="number" id="pWeight" placeholder="e.g. 24.5" required />
     </div>
 
     <div class="form-group">
@@ -52,53 +53,45 @@
   </div>
 
   <script>
-    const TARGET_CATALOG_ID = 'catalog-store-node-9988';
-    let peer = new Peer();
-    let conn = null;
-    let isConnected = false;
+    const DEVICE_CHANNEL = 'catalog_kiosk_9988';
+    const TOPIC_PING = `${DEVICE_CHANNEL}/ping`;
+    const TOPIC_HEARTBEAT = `${DEVICE_CHANNEL}/heartbeat`;
+    const TOPIC_UPLOAD = `${DEVICE_CHANNEL}/upload`;
+
+    let lastHeartbeat = 0;
+    let isCatalogOnline = false;
 
     const statusBox = document.getElementById('statusBox');
     const openModalBtn = document.getElementById('openModalBtn');
     const uploadBtn = document.getElementById('uploadBtn');
     const modal = document.getElementById('modal');
 
-    function connectToCatalog() {
-      if (conn && conn.open) return;
+    // Connect to MQTT Broker
+    const client = mqtt.connect('wss://broker.emqx.io:8084/mqtt');
 
-      conn = peer.connect(TARGET_CATALOG_ID, { reliable: true });
-
-      conn.on('open', () => {
-        setOnlineStatus(true);
-      });
-
-      conn.on('data', (data) => {
-        if (data.type === 'UPLOAD_SUCCESS') {
-          alert('Product successfully saved to remote Catalog storage!');
-        }
-      });
-
-      conn.on('close', () => {
-        setOnlineStatus(false);
-      });
-
-      conn.on('error', () => {
-        setOnlineStatus(false);
-      });
-    }
-
-    peer.on('open', () => {
-      // Continuously poll connection across the internet
-      setInterval(() => {
-        if (!conn || !conn.open) {
-          connectToCatalog();
-        }
-      }, 3000);
+    client.on('connect', () => {
+      client.subscribe(TOPIC_HEARTBEAT);
+      client.publish(TOPIC_PING, 'ping');
     });
 
+    client.on('message', (topic, message) => {
+      if (topic === TOPIC_HEARTBEAT) {
+        lastHeartbeat = Date.now();
+        setOnlineStatus(true);
+      }
+    });
+
+    // Check catalog presence every 2 seconds
+    setInterval(() => {
+      if (Date.now() - lastHeartbeat > 3500) {
+        setOnlineStatus(false);
+      }
+    }, 2000);
+
     function setOnlineStatus(online) {
-      isConnected = online;
+      isCatalogOnline = online;
       if (online) {
-        statusBox.textContent = 'Catalog Status: Online & Connected';
+        statusBox.textContent = 'Catalog Status: Online';
         statusBox.className = 'status-box online';
         openModalBtn.disabled = false;
         uploadBtn.disabled = false;
@@ -111,13 +104,13 @@
     }
 
     function toggleForm() {
-      if (!isConnected) return;
+      if (!isCatalogOnline) return;
       modal.style.display = modal.style.display === 'block' ? 'none' : 'block';
     }
 
     function handleUpload() {
-      if (!isConnected || !conn || !conn.open) {
-        alert('Catalog site is offline.');
+      if (!isCatalogOnline) {
+        alert('Catalog is currently offline.');
         return;
       }
 
@@ -132,21 +125,21 @@
 
       const reader = new FileReader();
       reader.onload = function(e) {
-        conn.send({
-          type: 'ADD_PRODUCT',
-          payload: {
-            id: Date.now(),
-            name,
-            weight,
-            image: e.target.result
-          }
-        });
+        const payload = {
+          id: Date.now(),
+          name,
+          weight,
+          image: e.target.result
+        };
+
+        client.publish(TOPIC_UPLOAD, JSON.stringify(payload));
 
         // Reset form
         document.getElementById('pName').value = '';
         document.getElementById('pWeight').value = '';
         fileInput.value = '';
         modal.style.display = 'none';
+        alert('Product pushed directly to the local Catalog!');
       };
 
       reader.readAsDataURL(fileInput.files[0]);
