@@ -3,9 +3,10 @@
 <head>
   <meta charset="UTF-8" />
   <title>Admin Dashboard</title>
+  <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
   <style>
     body { font-family: sans-serif; margin: 2rem; max-width: 450px; }
-    .status-box { padding: 10px; border-radius: 6px; margin-bottom: 1.5rem; font-weight: bold; }
+    .status-box { padding: 12px; border-radius: 6px; margin-bottom: 1.5rem; font-weight: bold; }
     .online { background: #dcfce7; color: #15803d; }
     .offline { background: #fee2e2; color: #b91c1c; }
     .btn { padding: 10px 16px; border: none; border-radius: 5px; cursor: pointer; font-weight: bold; width: 100%; }
@@ -19,26 +20,25 @@
   </style>
 </head>
 <body>
-  <h2>Catalog Management</h2>
+  <h2>Remote Admin Dashboard</h2>
   
   <div id="statusBox" class="status-box offline">
-    Catalog Status: Offline
+    Catalog Status: Disconnected / Offline
   </div>
 
   <button id="openModalBtn" class="btn btn-primary" disabled onclick="toggleForm()">
     + Add Product
   </button>
 
-  <!-- Product Entry Form -->
   <div id="modal">
     <div class="form-group">
       <label>Product Name</label>
-      <input type="text" id="pName" placeholder="e.g. Gold Ring" required />
+      <input type="text" id="pName" placeholder="e.g. Diamond Necklace" required />
     </div>
 
     <div class="form-group">
       <label>Product Weight (g)</label>
-      <input type="number" id="pWeight" placeholder="e.g. 12.5" required />
+      <input type="number" id="pWeight" placeholder="e.g. 18.2" required />
     </div>
 
     <div class="form-group">
@@ -52,36 +52,53 @@
   </div>
 
   <script>
-    const channel = new BroadcastChannel('catalog_channel');
-    let isCatalogOnline = false;
-    let lastHeartbeat = 0;
+    const TARGET_CATALOG_ID = 'catalog-store-node-9988';
+    let peer = new Peer();
+    let conn = null;
+    let isConnected = false;
 
     const statusBox = document.getElementById('statusBox');
     const openModalBtn = document.getElementById('openModalBtn');
     const uploadBtn = document.getElementById('uploadBtn');
     const modal = document.getElementById('modal');
 
-    // Receive heartbeats from Catalog
-    channel.onmessage = (event) => {
-      if (event.data.type === 'HEARTBEAT') {
-        lastHeartbeat = Date.now();
-        setOnlineStatus(true);
-      }
-    };
+    function connectToCatalog() {
+      if (conn && conn.open) return;
 
-    // Check status every 1.5 seconds
-    setInterval(() => {
-      if (Date.now() - lastHeartbeat > 2500) {
+      conn = peer.connect(TARGET_CATALOG_ID, { reliable: true });
+
+      conn.on('open', () => {
+        setOnlineStatus(true);
+      });
+
+      conn.on('data', (data) => {
+        if (data.type === 'UPLOAD_SUCCESS') {
+          alert('Product successfully saved to remote Catalog storage!');
+        }
+      });
+
+      conn.on('close', () => {
         setOnlineStatus(false);
-      } else {
-        channel.postMessage({ type: 'PING' });
-      }
-    }, 1500);
+      });
+
+      conn.on('error', () => {
+        setOnlineStatus(false);
+      });
+    }
+
+    peer.on('open', () => {
+      // Continuously poll connection across the internet
+      setInterval(() => {
+        if (!conn || !conn.open) {
+          connectToCatalog();
+        }
+      }, 3000);
+    });
 
     function setOnlineStatus(online) {
-      isCatalogOnline = online;
+      isConnected = online;
       if (online) {
-        statusBox.textContent = 'Catalog Status: Online';
+        statusBox.textContent = 'Catalog Status: Online & Connected';
         statusBox.className = 'status-box online';
         openModalBtn.disabled = false;
         uploadBtn.disabled = false;
@@ -94,13 +111,13 @@
     }
 
     function toggleForm() {
-      if (!isCatalogOnline) return;
+      if (!isConnected) return;
       modal.style.display = modal.style.display === 'block' ? 'none' : 'block';
     }
 
     function handleUpload() {
-      if (!isCatalogOnline) {
-        alert('Catalog is currently offline. Cannot upload.');
+      if (!isConnected || !conn || !conn.open) {
+        alert('Catalog site is offline.');
         return;
       }
 
@@ -109,29 +126,27 @@
       const fileInput = document.getElementById('pImage');
 
       if (!name || !weight || !fileInput.files[0]) {
-        alert('Please fill out all fields and select an image.');
+        alert('Please fill out all fields.');
         return;
       }
 
-      // Read image as Base64 to store in localStorage
       const reader = new FileReader();
       reader.onload = function(e) {
-        const payload = {
-          name,
-          weight,
-          image: e.target.result,
-          id: Date.now()
-        };
-
-        // Send product payload to Catalog
-        channel.postMessage({ type: 'ADD_PRODUCT', payload });
+        conn.send({
+          type: 'ADD_PRODUCT',
+          payload: {
+            id: Date.now(),
+            name,
+            weight,
+            image: e.target.result
+          }
+        });
 
         // Reset form
         document.getElementById('pName').value = '';
         document.getElementById('pWeight').value = '';
         fileInput.value = '';
         modal.style.display = 'none';
-        alert('Product sent to catalog storage!');
       };
 
       reader.readAsDataURL(fileInput.files[0]);
