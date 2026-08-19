@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Admin Dashboard</title>
+  <style>
+    body { font-family: sans-serif; margin: 2rem; max-width: 450px; }
+    .status-box { padding: 10px; border-radius: 6px; margin-bottom: 1.5rem; font-weight: bold; }
+    .online { background: #dcfce7; color: #15803d; }
+    .offline { background: #fee2e2; color: #b91c1c; }
+    .btn { padding: 10px 16px; border: none; border-radius: 5px; cursor: pointer; font-weight: bold; width: 100%; }
+    .btn-primary { background: #2563eb; color: #fff; }
+    .btn-success { background: #16a34a; color: #fff; }
+    .btn:disabled { background: #cbd5e1; color: #64748b; cursor: not-allowed; }
+    .form-group { margin-bottom: 1rem; }
+    label { display: block; margin-bottom: 0.25rem; font-size: 0.85rem; color: #333; }
+    input { width: 100%; padding: 8px; box-sizing: border-box; border: 1px solid #ccc; border-radius: 4px; }
+    #modal { display: none; margin-top: 1.5rem; padding: 1.25rem; border: 1px solid #e2e8f0; border-radius: 8px; background: #f8fafc; }
+  </style>
+</head>
+<body>
+  <h2>Catalog Management</h2>
+  
+  <div id="statusBox" class="status-box offline">
+    Catalog Status: Offline
+  </div>
+
+  <button id="openModalBtn" class="btn btn-primary" disabled onclick="toggleForm()">
+    + Add Product
+  </button>
+
+  <!-- Product Entry Form -->
+  <div id="modal">
+    <div class="form-group">
+      <label>Product Name</label>
+      <input type="text" id="pName" placeholder="e.g. Gold Ring" required />
+    </div>
+
+    <div class="form-group">
+      <label>Product Weight (g)</label>
+      <input type="number" id="pWeight" placeholder="e.g. 12.5" required />
+    </div>
+
+    <div class="form-group">
+      <label>Product Image</label>
+      <input type="file" id="pImage" accept="image/*" required />
+    </div>
+
+    <button id="uploadBtn" class="btn btn-success" disabled onclick="handleUpload()">
+      Upload Product
+    </button>
+  </div>
+
+  <script>
+    const channel = new BroadcastChannel('catalog_channel');
+    let isCatalogOnline = false;
+    let lastHeartbeat = 0;
+
+    const statusBox = document.getElementById('statusBox');
+    const openModalBtn = document.getElementById('openModalBtn');
+    const uploadBtn = document.getElementById('uploadBtn');
+    const modal = document.getElementById('modal');
+
+    // Receive heartbeats from Catalog
+    channel.onmessage = (event) => {
+      if (event.data.type === 'HEARTBEAT') {
+        lastHeartbeat = Date.now();
+        setOnlineStatus(true);
+      }
+    };
+
+    // Check status every 1.5 seconds
+    setInterval(() => {
+      if (Date.now() - lastHeartbeat > 2500) {
+        setOnlineStatus(false);
+      } else {
+        channel.postMessage({ type: 'PING' });
+      }
+    }, 1500);
+
+    function setOnlineStatus(online) {
+      isCatalogOnline = online;
+      if (online) {
+        statusBox.textContent = 'Catalog Status: Online';
+        statusBox.className = 'status-box online';
+        openModalBtn.disabled = false;
+        uploadBtn.disabled = false;
+      } else {
+        statusBox.textContent = 'Catalog Status: Offline';
+        statusBox.className = 'status-box offline';
+        openModalBtn.disabled = true;
+        uploadBtn.disabled = true;
+      }
+    }
+
+    function toggleForm() {
+      if (!isCatalogOnline) return;
+      modal.style.display = modal.style.display === 'block' ? 'none' : 'block';
+    }
+
+    function handleUpload() {
+      if (!isCatalogOnline) {
+        alert('Catalog is currently offline. Cannot upload.');
+        return;
+      }
+
+      const name = document.getElementById('pName').value.trim();
+      const weight = document.getElementById('pWeight').value.trim();
+      const fileInput = document.getElementById('pImage');
+
+      if (!name || !weight || !fileInput.files[0]) {
+        alert('Please fill out all fields and select an image.');
+        return;
+      }
+
+      // Read image as Base64 to store in localStorage
+      const reader = new FileReader();
+      reader.onload = function(e) {
+        const payload = {
+          name,
+          weight,
+          image: e.target.result,
+          id: Date.now()
+        };
+
+        // Send product payload to Catalog
+        channel.postMessage({ type: 'ADD_PRODUCT', payload });
+
+        // Reset form
+        document.getElementById('pName').value = '';
+        document.getElementById('pWeight').value = '';
+        fileInput.value = '';
+        modal.style.display = 'none';
+        alert('Product sent to catalog storage!');
+      };
+
+      reader.readAsDataURL(fileInput.files[0]);
+    }
+  </script>
+</body>
+</html>
