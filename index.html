@@ -3,7 +3,6 @@
 <head>
   <meta charset="UTF-8" />
   <title>Admin Dashboard</title>
-  <!-- MQTT.js library -->
   <script src="https://unpkg.com/mqtt/dist/mqtt.min.js"></script>
   <style>
     body { font-family: sans-serif; margin: 2rem; max-width: 450px; }
@@ -21,10 +20,10 @@
   </style>
 </head>
 <body>
-  <h2>Remote Admin Dashboard</h2>
+  <h2>Catalog Management (Admin)</h2>
   
   <div id="statusBox" class="status-box offline">
-    Catalog Status: Offline
+    Catalog Status: Disconnected (Offline)
   </div>
 
   <button id="openModalBtn" class="btn btn-primary" disabled onclick="toggleForm()">
@@ -34,12 +33,12 @@
   <div id="modal">
     <div class="form-group">
       <label>Product Name</label>
-      <input type="text" id="pName" placeholder="e.g. Gold Bangle" required />
+      <input type="text" id="pName" placeholder="e.g. Diamond Necklace" required />
     </div>
 
     <div class="form-group">
       <label>Product Weight (g)</label>
-      <input type="number" id="pWeight" placeholder="e.g. 24.5" required />
+      <input type="number" id="pWeight" placeholder="e.g. 18.5" step="0.01" required />
     </div>
 
     <div class="form-group">
@@ -53,10 +52,10 @@
   </div>
 
   <script>
-    const DEVICE_CHANNEL = 'catalog_kiosk_9988';
-    const TOPIC_PING = `${DEVICE_CHANNEL}/ping`;
-    const TOPIC_HEARTBEAT = `${DEVICE_CHANNEL}/heartbeat`;
-    const TOPIC_UPLOAD = `${DEVICE_CHANNEL}/upload`;
+    const CHANNEL_ID = 'catalog_sync_room_7788';
+    const TOPIC_PING = `${CHANNEL_ID}/ping`;
+    const TOPIC_HEARTBEAT = `${CHANNEL_ID}/heartbeat`;
+    const TOPIC_UPLOAD = `${CHANNEL_ID}/upload`;
 
     let lastHeartbeat = 0;
     let isCatalogOnline = false;
@@ -66,10 +65,16 @@
     const uploadBtn = document.getElementById('uploadBtn');
     const modal = document.getElementById('modal');
 
-    // Connect to MQTT Broker
-    const client = mqtt.connect('wss://broker.emqx.io:8084/mqtt');
+    // Connect to HiveMQ Public WebSocket Broker
+    const client = mqtt.connect('wss://broker.hivemq.com:8884/mqtt', {
+      clientId: 'admin_client_' + Math.random().toString(16).substring(2, 8),
+      keepalive: 30,
+      clean: true,
+      reconnectPeriod: 2000
+    });
 
     client.on('connect', () => {
+      console.log('[Admin] Connected to HiveMQ Broker');
       client.subscribe(TOPIC_HEARTBEAT);
       client.publish(TOPIC_PING, 'ping');
     });
@@ -81,12 +86,12 @@
       }
     });
 
-    // Check catalog presence every 2 seconds
+    // Monitor heartbeat every 1 second
     setInterval(() => {
-      if (Date.now() - lastHeartbeat > 3500) {
+      if (Date.now() - lastHeartbeat > 3000) {
         setOnlineStatus(false);
       }
-    }, 2000);
+    }, 1000);
 
     function setOnlineStatus(online) {
       isCatalogOnline = online;
@@ -96,7 +101,7 @@
         openModalBtn.disabled = false;
         uploadBtn.disabled = false;
       } else {
-        statusBox.textContent = 'Catalog Status: Offline';
+        statusBox.textContent = 'Catalog Status: Disconnected (Offline)';
         statusBox.className = 'status-box offline';
         openModalBtn.disabled = true;
         uploadBtn.disabled = true;
@@ -134,12 +139,11 @@
 
         client.publish(TOPIC_UPLOAD, JSON.stringify(payload));
 
-        // Reset form
         document.getElementById('pName').value = '';
         document.getElementById('pWeight').value = '';
         fileInput.value = '';
         modal.style.display = 'none';
-        alert('Product pushed directly to the local Catalog!');
+        alert('Product dispatched to local catalog!');
       };
 
       reader.readAsDataURL(fileInput.files[0]);
