@@ -1,153 +1,157 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8" />
-  <title>Admin Dashboard</title>
-  <script src="https://unpkg.com/mqtt/dist/mqtt.min.js"></script>
-  <style>
-    body { font-family: sans-serif; margin: 2rem; max-width: 450px; }
-    .status-box { padding: 12px; border-radius: 6px; margin-bottom: 1.5rem; font-weight: bold; text-align: center; }
-    .online { background: #dcfce7; color: #15803d; border: 1px solid #86efac; }
-    .offline { background: #fee2e2; color: #b91c1c; border: 1px solid #fca5a5; }
-    .btn { padding: 10px 16px; border: none; border-radius: 5px; cursor: pointer; font-weight: bold; width: 100%; }
-    .btn-primary { background: #2563eb; color: #fff; }
-    .btn-success { background: #16a34a; color: #fff; }
-    .btn:disabled { background: #cbd5e1; color: #64748b; cursor: not-allowed; }
-    .form-group { margin-bottom: 1rem; }
-    label { display: block; margin-bottom: 0.25rem; font-size: 0.85rem; color: #333; }
-    input { width: 100%; padding: 8px; box-sizing: border-box; border: 1px solid #ccc; border-radius: 4px; }
-    #modal { display: none; margin-top: 1.5rem; padding: 1.25rem; border: 1px solid #e2e8f0; border-radius: 8px; background: #f8fafc; }
-  </style>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Admin Dashboard (Multi-Device)</title>
+    <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
+    <style>
+        * { box-sizing: border-box; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+        body { margin: 0; padding: 2rem; background: #f1f5f9; display: flex; justify-content: center; }
+        .card { width: 100%; max-width: 440px; background: white; padding: 1.8rem; border-radius: 12px; box-shadow: 0 4px 12px rgba(0,0,0,0.08); }
+        h2 { margin: 0 0 1rem; color: #0f172a; }
+        
+        .status-pill { display: inline-block; padding: 6px 14px; border-radius: 20px; font-weight: bold; font-size: 0.85rem; margin-bottom: 1.5rem; }
+        .offline { background: #fee2e2; color: #991b1b; }
+        .online { background: #dcfce7; color: #166534; }
+
+        .form-group { margin-bottom: 1rem; }
+        label { display: block; font-size: 0.85rem; font-weight: 600; color: #475569; margin-bottom: 0.3rem; }
+        input { width: 100%; padding: 10px; border: 1px solid #cbd5e1; border-radius: 6px; font-size: 0.95rem; }
+        
+        .btn { width: 100%; padding: 12px; border: none; border-radius: 6px; font-size: 1rem; font-weight: 600; cursor: pointer; color: white; background: #2563eb; transition: 0.2s; }
+        .btn:disabled { background: #cbd5e1; color: #94a3b8; cursor: not-allowed; }
+        .btn-upload { background: #16a34a; margin-top: 0.5rem; }
+        .hidden { display: none; }
+        .separator { border: none; border-top: 1px solid #e2e8f0; margin: 1.5rem 0; }
+    </style>
 </head>
 <body>
-  <h2>Catalog Management (Admin)</h2>
-  
-  <div id="statusBox" class="status-box offline">
-    Catalog Status: Disconnected (Offline)
-  </div>
 
-  <button id="openModalBtn" class="btn btn-primary" disabled onclick="toggleForm()">
-    + Add Product
-  </button>
+    <div class="card">
+        <h2>Admin Controller</h2>
 
-  <div id="modal">
-    <div class="form-group">
-      <label>Product Name</label>
-      <input type="text" id="pName" placeholder="e.g. Diamond Necklace" required />
+        <div class="form-group">
+            <label>Target Catalog Device ID</label>
+            <input type="text" id="targetId" value="catalog-store-local-pc">
+            <button class="btn" style="margin-top: 6px;" onclick="initConnection()">Connect to Catalog</button>
+        </div>
+
+        <div id="statusBadge" class="status-pill offline">Catalog Status: OFFLINE</div>
+
+        <!-- Add product button (Enabled only when online) -->
+        <button id="addBtn" class="btn" disabled onclick="toggleForm()">+ Add Product</button>
+
+        <!-- Dynamic Product Form -->
+        <div id="formSection" class="hidden">
+            <hr class="separator">
+            <div class="form-group">
+                <label>Product Name</label>
+                <input type="text" id="pName" placeholder="Gold Necklace" required>
+            </div>
+            <div class="form-group">
+                <label>Product Weight (g)</label>
+                <input type="number" step="any" id="pWeight" placeholder="15.5" required>
+            </div>
+            <div class="form-group">
+                <label>Product Image</label>
+                <input type="file" id="pImage" accept="image/*" required>
+            </div>
+
+            <!-- Upload button (Disabled if catalog goes offline) -->
+            <button type="button" id="uploadBtn" class="btn btn-upload" disabled onclick="sendPayload()">Upload Product</button>
+        </div>
     </div>
 
-    <div class="form-group">
-      <label>Product Weight (g)</label>
-      <input type="number" id="pWeight" placeholder="e.g. 18.5" step="0.01" required />
-    </div>
+    <script>
+        const peer = new Peer();
+        let conn = null;
+        let heartbeatInterval = null;
 
-    <div class="form-group">
-      <label>Product Image</label>
-      <input type="file" id="pImage" accept="image/*" required />
-    </div>
+        function setOnline(isOnline) {
+            const badge = document.getElementById('statusBadge');
+            const addBtn = document.getElementById('addBtn');
+            const uploadBtn = document.getElementById('uploadBtn');
 
-    <button id="uploadBtn" class="btn btn-success" disabled onclick="handleUpload()">
-      Upload Product
-    </button>
-  </div>
+            if (isOnline) {
+                badge.className = 'status-pill online';
+                badge.innerText = 'Catalog Status: ONLINE';
+                addBtn.disabled = false;
+                uploadBtn.disabled = false;
+            } else {
+                badge.className = 'status-pill offline';
+                badge.innerText = 'Catalog Status: OFFLINE';
+                addBtn.disabled = true;
+                uploadBtn.disabled = true;
+                document.getElementById('formSection').classList.add('hidden');
+            }
+        }
 
-  <script>
-    const CHANNEL_ID = 'catalog_sync_room_7788';
-    const TOPIC_PING = `${CHANNEL_ID}/ping`;
-    const TOPIC_HEARTBEAT = `${CHANNEL_ID}/heartbeat`;
-    const TOPIC_UPLOAD = `${CHANNEL_ID}/upload`;
+        function initConnection() {
+            const targetId = document.getElementById('targetId').value.trim();
+            if (!targetId) return;
 
-    let lastHeartbeat = 0;
-    let isCatalogOnline = false;
+            if (conn) conn.close();
 
-    const statusBox = document.getElementById('statusBox');
-    const openModalBtn = document.getElementById('openModalBtn');
-    const uploadBtn = document.getElementById('uploadBtn');
-    const modal = document.getElementById('modal');
+            conn = peer.connect(targetId);
 
-    // Connect to HiveMQ Public WebSocket Broker
-    const client = mqtt.connect('wss://broker.hivemq.com:8884/mqtt', {
-      clientId: 'admin_client_' + Math.random().toString(16).substring(2, 8),
-      keepalive: 30,
-      clean: true,
-      reconnectPeriod: 2000
-    });
+            conn.on('open', () => {
+                setOnline(true);
+                // Start background heartbeat
+                clearInterval(heartbeatInterval);
+                heartbeatInterval = setInterval(() => {
+                    if (conn && conn.open) {
+                        conn.send({ type: 'PING' });
+                    }
+                }, 2500);
+            });
 
-    client.on('connect', () => {
-      console.log('[Admin] Connected to HiveMQ Broker');
-      client.subscribe(TOPIC_HEARTBEAT);
-      client.publish(TOPIC_PING, 'ping');
-    });
+            conn.on('data', (data) => {
+                if (data.type === 'HEARTBEAT_ACK') {
+                    setOnline(true);
+                }
+                if (data.type === 'UPLOAD_SUCCESS') {
+                    alert('Success! Image and data saved in the Catalog Local Storage.');
+                    document.getElementById('pName').value = '';
+                    document.getElementById('pWeight').value = '';
+                    document.getElementById('pImage').value = '';
+                    document.getElementById('formSection').classList.add('hidden');
+                }
+            });
 
-    client.on('message', (topic, message) => {
-      if (topic === TOPIC_HEARTBEAT) {
-        lastHeartbeat = Date.now();
-        setOnlineStatus(true);
-      }
-    });
+            conn.on('close', () => setOnline(false));
+            conn.on('error', () => setOnline(false));
+        }
 
-    // Monitor heartbeat every 1 second
-    setInterval(() => {
-      if (Date.now() - lastHeartbeat > 3000) {
-        setOnlineStatus(false);
-      }
-    }, 1000);
+        function toggleForm() {
+            const form = document.getElementById('formSection');
+            form.classList.toggle('hidden');
+        }
 
-    function setOnlineStatus(online) {
-      isCatalogOnline = online;
-      if (online) {
-        statusBox.textContent = 'Catalog Status: Online';
-        statusBox.className = 'status-box online';
-        openModalBtn.disabled = false;
-        uploadBtn.disabled = false;
-      } else {
-        statusBox.textContent = 'Catalog Status: Disconnected (Offline)';
-        statusBox.className = 'status-box offline';
-        openModalBtn.disabled = true;
-        uploadBtn.disabled = true;
-      }
-    }
+        function sendPayload() {
+            const name = document.getElementById('pName').value.trim();
+            const weight = document.getElementById('pWeight').value.trim();
+            const file = document.getElementById('pImage').files[0];
 
-    function toggleForm() {
-      if (!isCatalogOnline) return;
-      modal.style.display = modal.style.display === 'block' ? 'none' : 'block';
-    }
+            if (!name || !weight || !file) {
+                alert('Please fill all fields and select an image.');
+                return;
+            }
 
-    function handleUpload() {
-      if (!isCatalogOnline) {
-        alert('Catalog is currently offline.');
-        return;
-      }
-
-      const name = document.getElementById('pName').value.trim();
-      const weight = document.getElementById('pWeight').value.trim();
-      const fileInput = document.getElementById('pImage');
-
-      if (!name || !weight || !fileInput.files[0]) {
-        alert('Please fill out all fields.');
-        return;
-      }
-
-      const reader = new FileReader();
-      reader.onload = function(e) {
-        const payload = {
-          id: Date.now(),
-          name,
-          weight,
-          image: e.target.result
-        };
-
-        client.publish(TOPIC_UPLOAD, JSON.stringify(payload));
-
-        document.getElementById('pName').value = '';
-        document.getElementById('pWeight').value = '';
-        fileInput.value = '';
-        modal.style.display = 'none';
-        alert('Product dispatched to local catalog!');
-      };
-
-      reader.readAsDataURL(fileInput.files[0]);
-    }
-  </script>
+            // Convert image to Base64 to transport over P2P data channel
+            const reader = new FileReader();
+            reader.onload = function(e) {
+                conn.send({
+                    type: 'SAVE_PRODUCT',
+                    payload: {
+                        name: name,
+                        weight: weight,
+                        image: e.target.result
+                    }
+                });
+            };
+            reader.readAsDataURL(file);
+        }
+    </script>
 </body>
 </html>
