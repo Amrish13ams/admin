@@ -15,6 +15,28 @@
         .offline { background: #fee2e2; color: #991b1b; }
         .online { background: #dcfce7; color: #166534; }
 
+        .product-list { margin-top: 1.5rem; max-height: 400px; overflow-y: auto; padding-right: 5px; }
+        .product-item {
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+            background: #f8fafc;
+            padding: 0.75rem;
+            border-radius: 8px;
+            border: 1px solid #e2e8f0;
+            margin-bottom: 0.75rem;
+        }
+        .product-item img { width: 60px; height: 60px; object-fit: cover; border-radius: 4px; }
+        .product-info { flex-grow: 1; }
+        .product-info strong { display: block; color: #1e293b; }
+        .product-info p { margin: 0.2rem 0 0; font-size: 0.8rem; color: #64748b; }
+        .product-actions button {
+            padding: 6px 10px; font-size: 0.8rem; width: auto; margin-left: 5px;
+        }
+        .btn-edit { background: #f97316; }
+        .btn-delete { background: #ef4444; }
+
+
         .form-group { margin-bottom: 1rem; }
         label { display: block; font-size: 0.85rem; font-weight: 600; color: #475569; margin-bottom: 0.3rem; }
         input { width: 100%; padding: 10px; border: 1px solid #cbd5e1; border-radius: 6px; font-size: 0.95rem; }
@@ -42,6 +64,12 @@
         <!-- Add product button -->
         <button id="addBtn" class="btn" disabled onclick="toggleForm()">+ Add Product</button>
 
+        <div id="productListSection" class="hidden">
+            <hr class="separator">
+            <h3>Product List</h3>
+            <div id="productList" class="product-list"></div>
+        </div>
+
         <!-- Dynamic Product Form -->
         <div id="formSection" class="hidden">
             <hr class="separator">
@@ -68,23 +96,28 @@
         const peer = new Peer();
         let conn = null;
         let heartbeatInterval = null;
+        let currentProducts = [];
+        let editingProductId = null;
 
         function setOnline(isOnline) {
             const badge = document.getElementById('statusBadge');
             const addBtn = document.getElementById('addBtn');
             const uploadBtn = document.getElementById('uploadBtn');
+            const productListSection = document.getElementById('productListSection');
 
             if (isOnline) {
                 badge.className = 'status-pill online';
                 badge.innerText = 'Catalog Status: ONLINE';
                 addBtn.disabled = false;
                 uploadBtn.disabled = false;
+                productListSection.classList.remove('hidden');
             } else {
                 badge.className = 'status-pill offline';
                 badge.innerText = 'Catalog Status: OFFLINE';
                 addBtn.disabled = true;
                 uploadBtn.disabled = true;
                 document.getElementById('formSection').classList.add('hidden');
+                productListSection.classList.add('hidden');
             }
         }
 
@@ -110,23 +143,52 @@
             conn.on('data', (data) => {
                 if (data.type === 'HEARTBEAT_ACK') {
                     setOnline(true);
-                }
-                if (data.type === 'UPLOAD_SUCCESS') {
-                    alert('Uploaded and saved to Local Catalog successfully!');
-                    document.getElementById('uploadForm').reset();
-                    document.getElementById('formSection').classList.add('hidden');
-                    document.getElementById('uploadBtn').innerText = 'Upload Product';
-                    document.getElementById('uploadBtn').disabled = false;
+                } else if (data.type === 'CATALOG_UPDATED') {
+                    currentProducts = data.payload;
+                    renderProductList(currentProducts);
+                } else if (data.type === 'UPLOAD_SUCCESS') {
+                    alert('Product added successfully!');
+                    resetFormState();
+                } else if (data.type === 'UPDATE_SUCCESS') {
+                    alert('Product updated successfully!');
+                    resetFormState();
+                } else if (data.type === 'DELETE_SUCCESS') {
+                    alert('Product deleted successfully!');
                 }
             });
 
             conn.on('close', () => setOnline(false));
             conn.on('error', () => setOnline(false));
         }
+        
+        function renderProductList(products) {
+            const productListDiv = document.getElementById('productList');
+            if (!products || products.length === 0) {
+                productListDiv.innerHTML = '<p>No products in catalog.</p>';
+                return;
+            }
+            productListDiv.innerHTML = products.map(p => `
+                <div class="product-item" data-id="${p.id}">
+                    <img src="${p.image}" alt="${p.name}">
+                    <div class="product-info">
+                        <strong>${p.name}</strong>
+                        <p>${p.weight}g</p>
+                    </div>
+                    <div class="product-actions">
+                        <button class="btn btn-edit" onclick="editProduct('${p.id}')">Edit</button>
+                        <button class="btn btn-delete" onclick="deleteProduct('${p.id}')">Delete</button>
+                    </div>
+                </div>
+            `).join('');
+        }
 
         function toggleForm() {
             const form = document.getElementById('formSection');
-            form.classList.toggle('hidden');
+            if (editingProductId) { // Cancel edit
+                resetFormState();
+            } else {
+                form.classList.toggle('hidden');
+            }
         }
 
         // Compress image to ensure it fits within WebRTC packet limits
@@ -160,7 +222,7 @@
             reader.readAsDataURL(file);
         }
 
-        function sendPayload() {
+        async function sendPayload() {
             if (!conn || !conn.open) {
                 alert('Catalog connection is offline.');
                 return;
@@ -171,32 +233,76 @@
             const fileInput = document.getElementById('pImage');
             const file = fileInput.files[0];
 
-            if (!name || !weight || !file) {
-                alert('Please provide all details and an image.');
+            if (!name || !weight) {
+                alert('Please fill out name and weight.');
+                return;
+            }
+
+            if (!editingProductId && !file) {
+                alert('Please select an image for the new product.');
                 return;
             }
 
             const uploadBtn = document.getElementById('uploadBtn');
-            uploadBtn.innerText = 'Uploading...';
+            uploadBtn.innerText = 'Processing...';
             uploadBtn.disabled = true;
 
-            // Compress to max 800x800, JPEG quality 0.7 for fast WebRTC delivery
-            compressImage(file, 800, 800, 0.7, function(base64Data) {
+            const onProcessed = (base64Data) => {
+                const type = editingProductId ? 'UPDATE_PRODUCT' : 'SAVE_PRODUCT';
+                const payload = { name, weight };
+
+                if (editingProductId) {
+                    payload.id = editingProductId;
+                    if (base64Data) payload.image = base64Data;
+                } else {
+                    payload.image = base64Data;
+                }
+
                 try {
-                    conn.send({
-                        type: 'SAVE_PRODUCT',
-                        payload: {
-                            name: name,
-                            weight: weight,
-                            image: base64Data
-                        }
-                    });
+                    conn.send({ type, payload });
                 } catch (err) {
                     alert('Transfer failed: ' + err.message);
-                    uploadBtn.innerText = 'Upload Product';
-                    uploadBtn.disabled = false;
+                    resetFormState();
                 }
-            });
+            };
+
+            if (file) {
+                compressImage(file, 800, 800, 0.7, onProcessed);
+            } else {
+                onProcessed(null); // No new image for update
+            }
+        }
+
+        function editProduct(productId) {
+            const product = currentProducts.find(p => p.id == productId);
+            if (!product) return;
+
+            editingProductId = productId;
+
+            document.getElementById('pName').value = product.name;
+            document.getElementById('pWeight').value = product.weight;
+            document.getElementById('pImage').required = false; // Image is not required for update
+            
+            document.getElementById('formSection').classList.remove('hidden');
+            document.getElementById('uploadBtn').innerText = 'Update Product';
+            document.getElementById('addBtn').innerText = 'Cancel Edit';
+        }
+
+        function deleteProduct(productId) {
+            if (!conn || !conn.open) return alert('Catalog connection is offline.');
+            if (confirm('Are you sure you want to delete this product?')) {
+                conn.send({ type: 'DELETE_PRODUCT', payload: { id: productId } });
+            }
+        }
+
+        function resetFormState() {
+            editingProductId = null;
+            document.getElementById('uploadForm').reset();
+            document.getElementById('formSection').classList.add('hidden');
+            document.getElementById('uploadBtn').innerText = 'Upload Product';
+            document.getElementById('uploadBtn').disabled = false;
+            document.getElementById('addBtn').innerText = '+ Add Product';
+            document.getElementById('pImage').required = true;
         }
     </script>
 </body>
