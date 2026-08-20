@@ -67,6 +67,10 @@
         <div id="productListSection" class="hidden">
             <hr class="separator">
             <h3>Product List</h3>
+            <div class="form-group" style="margin-top: 1rem; margin-bottom: 0.5rem;">
+                <label for="searchInput">Filter Products</label>
+                <input type="text" id="searchInput" oninput="filterProducts()" placeholder="Search by name or weight...">
+            </div>
             <div id="productList" class="product-list"></div>
         </div>
 
@@ -145,7 +149,7 @@
                     setOnline(true);
                 } else if (data.type === 'CATALOG_UPDATED') {
                     currentProducts = data.payload;
-                    renderProductList(currentProducts);
+                    filterProducts(); // Render list, applying any existing filter
                 } else if (data.type === 'UPLOAD_SUCCESS') {
                     alert('Product added successfully!');
                     resetFormState();
@@ -163,8 +167,15 @@
         
         function renderProductList(products) {
             const productListDiv = document.getElementById('productList');
+            const searchInput = document.getElementById('searchInput');
+            const searchTerm = searchInput ? searchInput.value : '';
+
             if (!products || products.length === 0) {
-                productListDiv.innerHTML = '<p>No products in catalog.</p>';
+                if (searchTerm) {
+                    productListDiv.innerHTML = '<p>No products match your search.</p>';
+                } else {
+                    productListDiv.innerHTML = '<p>No products in catalog.</p>';
+                }
                 return;
             }
             productListDiv.innerHTML = products.map(p => `
@@ -189,6 +200,18 @@
             } else {
                 form.classList.toggle('hidden');
             }
+        }
+
+        function filterProducts() {
+            const searchTerm = document.getElementById('searchInput').value.toLowerCase();
+            if (!searchTerm) {
+                renderProductList(currentProducts);
+                return;
+            }
+            const filtered = currentProducts.filter(p => 
+                p.name.toLowerCase().includes(searchTerm) || 
+                p.weight.toString().toLowerCase().includes(searchTerm));
+            renderProductList(filtered);
         }
 
         // Compress image to ensure it fits within WebRTC packet limits
@@ -297,6 +320,7 @@
 
         function resetFormState() {
             editingProductId = null;
+            document.getElementById('searchInput').value = ''; // Clear search on form reset
             document.getElementById('uploadForm').reset();
             document.getElementById('formSection').classList.add('hidden');
             document.getElementById('uploadBtn').innerText = 'Upload Product';
