@@ -39,27 +39,28 @@
 
         <div id="statusBadge" class="status-pill offline">Catalog Status: OFFLINE</div>
 
-        <!-- Add product button (Enabled only when online) -->
+        <!-- Add product button -->
         <button id="addBtn" class="btn" disabled onclick="toggleForm()">+ Add Product</button>
 
         <!-- Dynamic Product Form -->
         <div id="formSection" class="hidden">
             <hr class="separator">
-            <div class="form-group">
-                <label>Product Name</label>
-                <input type="text" id="pName" placeholder="Gold Necklace" required>
-            </div>
-            <div class="form-group">
-                <label>Product Weight (g)</label>
-                <input type="number" step="any" id="pWeight" placeholder="15.5" required>
-            </div>
-            <div class="form-group">
-                <label>Product Image</label>
-                <input type="file" id="pImage" accept="image/*" required>
-            </div>
+            <form id="uploadForm" onsubmit="event.preventDefault(); sendPayload();">
+                <div class="form-group">
+                    <label>Product Name</label>
+                    <input type="text" id="pName" placeholder="Gold Necklace" required>
+                </div>
+                <div class="form-group">
+                    <label>Product Weight (g)</label>
+                    <input type="number" step="any" id="pWeight" placeholder="15.5" required>
+                </div>
+                <div class="form-group">
+                    <label>Product Image</label>
+                    <input type="file" id="pImage" accept="image/*" required>
+                </div>
 
-            <!-- Upload button (Disabled if catalog goes offline) -->
-            <button type="button" id="uploadBtn" class="btn btn-upload" disabled onclick="sendPayload()">Upload Product</button>
+                <button type="submit" id="uploadBtn" class="btn btn-upload" disabled>Upload Product</button>
+            </form>
         </div>
     </div>
 
@@ -93,17 +94,17 @@
 
             if (conn) conn.close();
 
-            conn = peer.connect(targetId);
+            // Set reliable: true to ensure binary data is properly received
+            conn = peer.connect(targetId, { reliable: true });
 
             conn.on('open', () => {
                 setOnline(true);
-                // Start background heartbeat
                 clearInterval(heartbeatInterval);
                 heartbeatInterval = setInterval(() => {
                     if (conn && conn.open) {
                         conn.send({ type: 'PING' });
                     }
-                }, 2500);
+                }, 3000);
             });
 
             conn.on('data', (data) => {
@@ -111,11 +112,11 @@
                     setOnline(true);
                 }
                 if (data.type === 'UPLOAD_SUCCESS') {
-                    alert('Success! Image and data saved in the Catalog Local Storage.');
-                    document.getElementById('pName').value = '';
-                    document.getElementById('pWeight').value = '';
-                    document.getElementById('pImage').value = '';
+                    alert('Uploaded and saved to Local Catalog successfully!');
+                    document.getElementById('uploadForm').reset();
                     document.getElementById('formSection').classList.add('hidden');
+                    document.getElementById('uploadBtn').innerText = 'Upload Product';
+                    document.getElementById('uploadBtn').disabled = false;
                 }
             });
 
@@ -128,29 +129,74 @@
             form.classList.toggle('hidden');
         }
 
-        function sendPayload() {
-            const name = document.getElementById('pName').value.trim();
-            const weight = document.getElementById('pWeight').value.trim();
-            const file = document.getElementById('pImage').files[0];
+        // Compress image to ensure it fits within WebRTC packet limits
+        function compressImage(file, maxWidth, maxHeight, quality, callback) {
+            const reader = new FileReader();
+            reader.onload = function(e) {
+                const img = new Image();
+                img.onload = function() {
+                    let canvas = document.createElement('canvas');
+                    let width = img.width;
+                    let height = img.height;
 
-            if (!name || !weight || !file) {
-                alert('Please fill all fields and select an image.');
+                    if (width > maxWidth) {
+                        height = Math.round((height * maxWidth) / width);
+                        width = maxWidth;
+                    }
+                    if (height > maxHeight) {
+                        width = Math.round((width * maxHeight) / height);
+                        height = maxHeight;
+                    }
+
+                    canvas.width = width;
+                    canvas.height = height;
+                    const ctx = canvas.getContext('2d');
+                    ctx.drawImage(img, 0, 0, width, height);
+
+                    callback(canvas.toDataURL('image/jpeg', quality));
+                };
+                img.src = e.target.result;
+            };
+            reader.readAsDataURL(file);
+        }
+
+        function sendPayload() {
+            if (!conn || !conn.open) {
+                alert('Catalog connection is offline.');
                 return;
             }
 
-            // Convert image to Base64 to transport over P2P data channel
-            const reader = new FileReader();
-            reader.onload = function(e) {
-                conn.send({
-                    type: 'SAVE_PRODUCT',
-                    payload: {
-                        name: name,
-                        weight: weight,
-                        image: e.target.result
-                    }
-                });
-            };
-            reader.readAsDataURL(file);
+            const name = document.getElementById('pName').value.trim();
+            const weight = document.getElementById('pWeight').value.trim();
+            const fileInput = document.getElementById('pImage');
+            const file = fileInput.files[0];
+
+            if (!name || !weight || !file) {
+                alert('Please provide all details and an image.');
+                return;
+            }
+
+            const uploadBtn = document.getElementById('uploadBtn');
+            uploadBtn.innerText = 'Uploading...';
+            uploadBtn.disabled = true;
+
+            // Compress to max 800x800, JPEG quality 0.7 for fast WebRTC delivery
+            compressImage(file, 800, 800, 0.7, function(base64Data) {
+                try {
+                    conn.send({
+                        type: 'SAVE_PRODUCT',
+                        payload: {
+                            name: name,
+                            weight: weight,
+                            image: base64Data
+                        }
+                    });
+                } catch (err) {
+                    alert('Transfer failed: ' + err.message);
+                    uploadBtn.innerText = 'Upload Product';
+                    uploadBtn.disabled = false;
+                }
+            });
         }
     </script>
 </body>
